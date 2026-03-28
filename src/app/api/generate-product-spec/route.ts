@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateProductSpec } from '@/lib/minimax';
+import { generateProductSpecWithFallback } from '@/lib/ai-client';
 import { StartupOverview } from '@/types';
 
 export async function POST(request: NextRequest) {
@@ -17,8 +17,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const productSpec = await generateProductSpec(overview, startupName);
-    return NextResponse.json(productSpec);
+    const { data, model } = await generateProductSpecWithFallback(overview, startupName);
+    return NextResponse.json({ ...data, model });
   } catch (error) {
     console.error('Error generating product spec:', error);
     return NextResponse.json(

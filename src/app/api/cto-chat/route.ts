@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const MINIMAX_API_URL = 'https://api.minimax.chat/v1/text/chatcompletion_pro';
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || '';
+import { chatWithFallback, generateSynthesizedMasterplan } from '@/lib/ai-client';
 
 const INTRO = `Hey there! It's great to connect with you.
 
@@ -19,7 +17,7 @@ interface ChatContext {
   idea: string;
   targetAudience: string;
   platform: string;
-  features: string;
+  features: string[];
   techStack: string;
   challenges: string;
 }
@@ -94,56 +92,105 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Messages array is required' }, { status: 400 });
     }
 
-    if (!MINIMAX_API_KEY) {
-      return NextResponse.json({ content: "MINIMAX_API_KEY is missing from the environment variables. Please add it to .env.local to enable the AI CTO." });
+    const userMessages = messages.filter((m: { role: string }) => m.role === 'user');
+    const numUserMessages = userMessages.length;
+
+    if (numUserMessages === 0) {
+      conversationCount = 0;
+      currentQuestionIndex = 0;
+      userContext = {};
+      return NextResponse.json({ content: INTRO, questionKey: 'intro' });
     }
 
-    // Format messages for the MiniMax API
-    // Ensure roles are mapped correctly. Often Minimax uses 'user' and 'assistant', and sometimes 'system'.
-    const formattedMessages = messages.map((msg: { role: string; content: string }) => {
-      // Map frontend roles ('cto', 'system') to standard LLM roles
-      let role = 'user';
-      if (msg.role === 'cto' || msg.role === 'assistant') role = 'assistant';
-      if (msg.role === 'system') role = 'system';
-      return { role, content: msg.content };
-    });
+    const lastUserMessage = userMessages[numUserMessages - 1]?.content || '';
 
-    const response = await fetch(MINIMAX_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${MINIMAX_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'abab6.5s-chat', // Using a reliable Minimax chat model since 'MiniMax-Text-01' might be deprecated or non-conversational
-        tokens_to_generate: 3500,
-        temperature: 0.7,
-        messages: formattedMessages
-      }),
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const content = data.choices?.[0]?.messages?.[0]?.text || data.choices?.[0]?.message?.content || '';
-
-      const isMasterplan = content.toLowerCase().includes('masterplan') || content.includes('```markdown');
-
-      return NextResponse.json({
-        content: content,
-        isMasterplan
-      });
-    } else {
-      const errorText = await response.text();
-      console.error('LLM API error:', errorText);
-      return NextResponse.json({
-        content: "I'm having trouble connecting to my neural network right now. Could you give me a second and try again?",
-        error: true
-      });
+    if (numUserMessages === 1) {
+      userContext.idea = lastUserMessage;
     }
+
+    const ctoPrompt = `You are a friendly virtual CTO helping an entrepreneur brainstorm their app idea.
+User's idea: ${userContext.idea || lastUserMessage}
+
+Based on the conversation so far, ask a follow-up question or provide guidance.
+Keep responses conversational, friendly, and under 200 words.
+Ask one focused question at a time to understand the idea better.`;
+
+    const fallbackQuestion = numUserMessages >= 1 && numUserMessages < 6
+      ? (() => {
+        const questionKey = questionOrder[numUserMessages - 1];
+        if (questionKey && QUESTIONS[questionKey]) {
+          const { q, field } = QUESTIONS[questionKey];
+          userContext[field] = lastUserMessage;
+          return q;
+        }
+        return null;
+      })()
+      : null;
+
+    const fallbackResponse = fallbackQuestion || `That's great! Let me help you think through this more. What specific problem does your app solve?`;
+
+    const aiResponse = await chatWithFallback(messages, fallbackResponse);
+
+    if (aiResponse.model === 'fallback') {
+      if (fallbackQuestion) {
+        userContext[questionOrder[numUserMessages - 1] as keyof ChatContext] = lastUserMessage;
+        return NextResponse.json({
+          content: fallbackQuestion,
+          questionKey: questionOrder[numUserMessages - 1],
+          context: userContext,
+          model: 'fallback'
+        });
+      }
+    }
+
+    if (numUserMessages >= 1 && numUserMessages < 6) {
+      const questionKey = questionOrder[numUserMessages - 1];
+      if (questionKey && QUESTIONS[questionKey]) {
+        const { q, field } = QUESTIONS[questionKey];
+        userContext[field] = lastUserMessage;
+        return NextResponse.json({
+          content: aiResponse.content || q,
+          questionKey,
+          context: userContext,
+          model: aiResponse.model
+        });
+      }
+    }
+
+    userContext.challenges = lastUserMessage;
+    currentQuestionIndex = 0;
+
+    let masterplanStr = '';
+    let finalModel = aiResponse.model;
+
+    try {
+      const synthesis = await generateSynthesizedMasterplan(userContext);
+      masterplanStr = synthesis.content;
+      finalModel = synthesis.model as any;
+    } catch (e) {
+      console.error("Synthesis failed, falling back to basic outline:", e);
+      masterplanStr = `# ${userContext.idea?.split('\n')[0] || 'Product'} Masterplan
+**Version: 1.0 (Fallback)**
+... Unable to generate AI insights due to missing or invalid keys ...`;
+    }
+
+    return NextResponse.json({
+      content: `That's incredibly helpful! You've given me a really clear picture.
+
+I have everything I need to create your masterplan. This has been a great conversation—I'm impressed by how well you've thought through your idea.
+
+I just asked my internal teams (Minimax Architecture and Google Market Trends) to analyze your inputs. Let me synthesize their drafts into a masterplan.md file for you. This will act as your high-level blueprint.
+
+Give me just a moment to generate it for you!\n\n---\n\n${masterplanStr}\n\n---\n\n**That's your masterplan!** Take a look through it. Would you like me to adjust anything or dive deeper into any particular section?`,
+      isMasterplan: true,
+      context: userContext,
+      model: finalModel
+    });
+
   } catch (error) {
     console.error('Error in CTO chat:', error);
     return NextResponse.json({
-      content: "I encountered an internal error. Let's try picking up where we left off.",
+      content: "I'm sorry, I ran into an issue. Could you tell me more about your app idea?",
       error: true
     });
   }

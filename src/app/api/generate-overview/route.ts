@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateOverview } from '@/lib/minimax';
+import { generateOverviewWithFallback } from '@/lib/ai-client';
 import { StartupInput } from '@/types';
 
 export async function POST(request: NextRequest) {
@@ -17,8 +17,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const overview = await generateOverview(input);
-    return NextResponse.json(overview);
+    const { data, model } = await generateOverviewWithFallback(input);
+    return NextResponse.json({ ...data, model });
   } catch (error) {
     console.error('Error generating overview:', error);
     return NextResponse.json(

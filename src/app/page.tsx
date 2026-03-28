@@ -51,7 +51,7 @@ export default function LandingPage() {
           transition={{ duration: 0.8, delay: 0.1 }}
           className="px-6 py-2.5 rounded-full border border-[#d6e5ff] bg-white/70 backdrop-blur-md mb-10 text-[#2563eb] text-sm font-semibold tracking-wide shadow-sm flex items-center gap-2"
         >
-          <span>India's Sovereign AI Platform</span>
+          <span>India&apos;s Sovereign AI Platform</span>
         </motion.div>
 
         {/* Hero Typography */}
